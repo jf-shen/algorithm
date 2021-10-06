@@ -58,7 +58,8 @@ class Context:
         plt.legend()
         plt.show()
     
-if __name__ == '__main__':   
+if __name__ == '__main__':  
+    x = [5,6,7,8,7.5,8.5] 
     context = Context(x)
 
     for t in range(strategy.T):
