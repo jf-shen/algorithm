@@ -20,7 +20,8 @@ def initialize(context):
     
 def set_params():
     g.days = 0
-    g.stockNum = 10
+    g.return_count_reduce = 10
+
     g.corr_count = 200 
 
     g.candidate_set_refresh_rate = 10
@@ -35,34 +36,53 @@ def set_backtest():
     log.set_level('order', 'error')
     
 def strategy(context):
-    candidateSet = get_candidate_set(context)
-    score_dict = rank(context, candidateSet)
+    df = None
+    df = recall(context, df)
+    df = reduce(context, df)
+    df = rank(context, df)
+    df = trade(context, df)
 
-    trade(context, candidateSet, score_dict)
     g.days += 1
 
-def get_candidate_set(context):
-    if g.days % g.candidate_set_refresh_rate != 0:
-        return g.candidate_set
+def recall(context, df=None):
+    sample = get_index_stocks('000001.XSHG', date = None)
+    q = query(
+              valuation.code,
+              valuation.market_cap, 
+              balance.total_assets - balance.total_liability,  # 净资产
+              balance.total_assets / balance.total_liability,  # 资产负债比
+              income.net_profit, 
+              income.net_profit + 1, 
+              indicator.inc_revenue_year_on_year, 
+              balance.development_expenditure
+        ).filter(
+            valuation.code.in_(sample)
+        )
+    df = get_fundamentals(q, date = None)
+    df.index = df.code.values
+    del df['code']
+    return df
 
-    X, Y = get_training_data(context)
+def reduce(context, df):
 
+    X, Y = get_training_data(context, df)
     model = sklearn.linear_model.ElasticNet(alpha=1, l1_ratio=0.5)
     model.fit(X,Y)
 
     factor = Y - pd.DataFrame(model.predict(X), index = Y.index, columns = ['log_mcap'])    ## log(真实市值) - log(预测市值)
-    factor = factor.sort_index(by = 'log_mcap')
+    factor = factor.sort_values(by = 'log_mcap')
 
-    candidateSet = list(factor.index[:g.stockNum])
+    df['rmscore'] = factor['log_mcap']
 
-    g.candidate_set = candidateSet
-    return candidateSet
+    return_idx = factor.index[:g.return_count_reduce].values
+    df = df.loc[return_idx]
+    return df
 
-def rank(context, candidateSet):
+def rank(context, df):
 
     end_date = context.current_dt - datetime.timedelta(days=0.5) 
     price = get_price(
-        candidateSet, 
+        df.index.values.tolist(), 
         start_date=None,   # 使用count 
         end_date=end_date, 
         frequency='daily', 
@@ -86,23 +106,21 @@ def rank(context, candidateSet):
     
     score_dict = {} 
     for index, incr in trend_dict.items():
-        # print(index)
         corr = corr_dict[index]
         if np.isfinite(corr):
             score_dict[index] = corr * incr
     
-    return score_dict
+    score_df = pd.DataFrame.from_dict(score_dict, orient='index')
+    score_df.columns = ['rkscore']
+    df = df.join(score_df)
 
-def trade(context, candidateSet, score_dict):
-    dataSet = [] 
-    for index in candidateSet:
-        if score_dict.get(index) is not None and score_dict[index] > 0:
-            dataSet.append(index)
+    return df
 
-    print(dataSet)
+def trade(context, df):
+    df = df[df['rkscore'] > 0]
 
     position_set = set(context.portfolio.positions.keys())
-    target_set = set(dataSet)
+    target_set = set(df.index.values.tolist())
 
     buy_set = target_set - position_set
     sell_set = position_set - target_set
@@ -118,33 +136,15 @@ def trade(context, candidateSet, score_dict):
         order_target_value(stock, cash)
 
 
-def get_training_data(context):
-    sample = get_index_stocks('000001.XSHG', date = None)
-    q = query(
-              valuation.code,
-              valuation.market_cap, 
-              balance.total_assets - balance.total_liability,  # 净资产
-              balance.total_assets / balance.total_liability,  # 资产负债比
-              income.net_profit, 
-              income.net_profit + 1, 
-              indicator.inc_revenue_year_on_year, 
-              balance.development_expenditure
-        ).filter(
-            valuation.code.in_(sample)
-        )
-        
-    df = get_fundamentals(q, date = None)
-
-    df.columns = ['code', 'log_mcap', 'log_NC', 'LEV', 'NI_p', 'NI_n', 'g', 'log_RD']
+def get_training_data(context, df):
+    df.columns = ['log_mcap', 'log_NC', 'LEV', 'NI_p', 'NI_n', 'g', 'log_RD']
 
     df['log_mcap'] = np.log(df['log_mcap'])
     df['log_NC'] = np.log(df['log_NC'])
     df['NI_p'] = np.log(np.abs(df['NI_p']))
     df['NI_n'] = np.log(np.abs(df['NI_n'][df['NI_n'] < 0]))
     df['log_RD'] = np.log(df['log_RD'])
-    df.index = df.code.values
 
-    del df['code']
     df = df.fillna(0)
     df[df > 10000] = 10000
     df[df < -10000] = -10000
