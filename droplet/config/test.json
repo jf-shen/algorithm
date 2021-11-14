@@ -1,0 +1,35 @@
+{
+    "dag": {
+        "get_value_factor": "model",
+        "get_momentum_factor": "model", 
+        "model": "strategy" 
+    },
+    "nodes": {
+        "get_value_factor": {
+            "type": "get_value_factor"
+        },
+        "get_momentum_factor": {
+            "type": "get_momentum_factor"
+        },
+        "model": {
+            "type": "wide_and_deep" 
+        },
+        "strategy": {
+            "dag": {
+                "recall": "rank",
+                "rank": "rerank"
+            },
+            "nodes": {
+                "recall": {
+                    "type": "recall"
+                },
+                "rank": {
+                    "type": "rank"
+                },
+                "rerank": {
+                    "type": "rerank"
+                }
+            }
+        }
+    }
+}
