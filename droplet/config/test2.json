@@ -1,0 +1,41 @@
+{
+    "dag": {
+        "get_value_factor": "model",
+        "get_momentum_factor": "model", 
+        "model": "strategy" 
+    },
+    "nodes": {
+        "get_value_factor": {
+            "type": "test", 
+            "alias": "get_value_factor"
+        },
+        "get_momentum_factor": {
+            "type": "test", 
+            "alias": "get_momentum_factor"
+        },
+        "model": {
+            "type": "test",
+            "alias": "wide_and_deep" 
+        },
+        "strategy": {
+            "dag": {
+                "recall": "rank",
+                "rank": "rerank"
+            },
+            "nodes": {
+                "recall": {
+                  	"type": "test", 
+                    "alias": "recall"
+                },
+                "rank": {
+                  	"type": "test", 
+                    "alias": "rank"
+                },
+                "rerank": {
+                    "type": "test", 
+                    "alias": "rerank"
+                }
+            }
+        }
+    }
+}

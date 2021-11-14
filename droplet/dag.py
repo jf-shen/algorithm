@@ -145,11 +145,12 @@ def build_graph(prefix, config, context, input_list, result_map):
 
         result_map[prefix] = output     
         print("finish building graph: %s" % prefix)
+    return output
     
 
 if __name__ == '__main__':
 
-    config_path = 'config/test.json'
+    config_path = 'config/test2.json'
 
     with open(config_path) as f:
         config = json.load(f)
