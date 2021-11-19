@@ -193,6 +193,16 @@ def build_sample(start_date,
         
     training_set = training_set.merge(beta_df, how = 'left', on=['date', 'stock_name'])
     
+    ## ======= Patch ====== ## 
+    fea = ['log_mcap',
+           'log_NC', 'LEV', 'NI_p', 'NI_n', 'g', 'log_RD', '801010', '801020',
+           '801030', '801040', '801050', '801080', '801110', '801120', '801130',
+           '801140', '801150', '801160', '801170', '801180', '801200', '801210',
+           '801230', '801710', '801720', '801730', '801740', '801750', '801760',
+           '801770', '801780', '801790', '801880', '801890']
+
+    training_set.columns = [s + '_' if s in fea else s for s in training_set.columns]
+    
     return training_set
 
 

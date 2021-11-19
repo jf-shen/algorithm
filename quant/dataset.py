@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd 
 import matplotlib.pyplot as plt 
 import seaborn 
+import sklearn
 
 
 class DataSet(pd.DataFrame):
@@ -12,9 +13,10 @@ class DataSet(pd.DataFrame):
     test_set = None 
     
     model = 'linear_model'
-    default_label = None
-    default_test_ratio = 0.2
+    label = None
+    test_ratio = 0.2
     
+    model_obj = None
     
     @property
     def _constructor(self):
@@ -27,16 +29,16 @@ class DataSet(pd.DataFrame):
     
     # ================ Quick Functions =============== # 
     
-    def _head(self, n=3):
+    def head_(self, n=3):
         return self[self.display_columns].head(n)
     
-    def _tail(self, n=3):
+    def tail_(self, n=3):
         return self[self.display_columns].tail(n)
     
     def mse(self, pred=None, label=None):
         if label is None:
-            assert self.default_label is not None, "no label and no default label"
-            label = self.default_label
+            assert self.label is not None, "no label and no default label"
+            label = self.label
             print("use default label: ", label)
         
         return np.mean((self[pred] - self[label]) ** 2)
@@ -49,12 +51,46 @@ class DataSet(pd.DataFrame):
         return summary_df
     
     def get_label(self):
-        return self[self.default_label]
+        return self[self.label]
     
     def add_display(self, *args):
         for s in args:
             self.display_columns.append(s)
+            
+            
+    # =============== Ancillary Functions ============= # 
     
+    def check_label(self, label, verbose=False):
+        assert (label is not None) or (self.label is not None), 'no label and default label'
+        if label is not None:
+            self.label = label 
+        else:
+            label = self.label
+            if verbose:
+                print("use default label: ", label)
+        return label
+        
+    def check_model(self, model, verbose=False):
+        assert (model is not None) or (self.model is not None), 'no model and default model'
+        if model is not None:
+            self.model = model
+        else:
+            model = self.model
+            if verbose:
+                print("use default model: ", model)
+        return model
+    
+    def check_test_ratio(self, test_ratio, verbose=False):
+        assert (test_ratio is not None) or (self.test_ratio is not None), \
+                'no test ratio and default test ratio '
+        if test_ratio is not None:
+            self.test_ratio = test_ratio
+        else:
+            test_ratio = self.test_ratio
+            if verbose:
+                print("use default test_ratio: ", test_ratio)
+        return test_ratio
+        
     
     # ================ Predictive Models  =============== # 
     
@@ -71,9 +107,7 @@ class DataSet(pd.DataFrame):
         
         assert split_field in self.columns, "field is not found: %s" % split_field
         
-        test_ratio = self.default_test_ratio if test_ratio is None else test_ratio
-        assert test_ratio is not None
-        self.default_test_ratio = test_ratio
+        test_ratio = self.check_test_ratio(test_ratio)
         
         df = self
         sample_num = df.shape[0] 
@@ -92,35 +126,113 @@ class DataSet(pd.DataFrame):
         print("test set: sample num = %s, ratio = %.3f" % (test_num, test_num / sample_num)) 
   
     
-    def fit(self, *args, **kargs) :
-        print('model: %s'% self.model)
-        if self.model == 'linear_model':
-            return self.linear_model(*args, **kargs)
+    def fit(self, 
+            features=[], 
+            label=None, 
+            model = None, 
+            *args, 
+            **kargs) :
+
+        label = self.check_label(label, verbose=True)
+        model = self.check_model(model)
+        print('model: %s' % model)
+        
+        if model == 'linear_model':
+            return self.linear_model(features=features, label=label, *args, **kargs)
+        elif model == 'elastic_net':
+            return self.elastic_net(features=features, label=label, *args, **kargs)
+        elif model == 'svr':
+            return self.svr(features=features, label=label, *args, **kargs)
         else:
-            raise NotImplementedError()     
+            raise NotImplementedError(model)  
     
+    def svr(self, 
+            features=[], 
+            label=None, 
+            kernel='rbf', 
+            verbose=False, 
+            suffix='',
+            append_prediction=True
+        ):
+        
+        training_set, test_set = self.training_set, self.test_set
+        assert (training_set is not None) and (test_set is not None)
+        
+        X = np.array(training_set[features].values)
+        Y = np.array(training_set[label].values) 
+        
+        model = sklearn.svm.SVR(kernel=kernel, verbose=verbose)
+        model.fit(X, Y)
+        self.model_obj = model
+        
+        def _mask(X):
+            # mask unknown features
+            idx = [fea[0] == '_' for fea in features]
+            X_mask = X.copy() 
+            X_mask[:, idx] = 0 
+            return X_mask 
+        
+        if append_prediction:
+            self['_pred%s' % suffix] = model.predict(self[features]) 
+            self['pred%s_' % suffix] = model.predict(_mask(self[features].values))
+            self['_err%s' % suffix] = np.array(self[label] - self['_pred%s' % suffix])
+            self.split()
+            
+    def elastic_net(self, 
+            features=[], 
+            label=None, 
+            alpha=1e-4,
+            l1_ratio=0.5,
+            suffix='',
+            append_prediction=True,
+            fit_intercept=False
+        ):
+        
+        training_set, test_set = self.training_set, self.test_set
+        assert (training_set is not None) and (test_set is not None)
+        
+        X = np.array(training_set[features].values)
+        Y = np.array(training_set[label].values)
+        
+        model = sklearn.linear_model.ElasticNet(alpha=alpha, 
+                                                l1_ratio=l1_ratio, 
+                                                fit_intercept=fit_intercept)
+        model.fit(X, Y)
+        self.model_obj = model
+        
+        
+        coeff_dict = dict(zip(features, model.coef_))
+        if fit_intercept:
+            coeff_dict['intercept'] = model.intercept_
+            
+        def _mask(X):
+            # mask unknown features
+            idx = [fea[0] == '_' for fea in features]
+            X_mask = X.copy() 
+            X_mask[:, idx] = 0
+            return X_mask 
+            
+        if append_prediction:
+            self['_pred%s' % suffix] = model.predict(self[features]) 
+            self['pred%s_' % suffix] = model.predict(_mask(self[features].values))
+            self['_err%s' % suffix] = np.array(self[label] - self['_pred%s' % suffix])
+            self.split()
+            
+        coeff_df = pd.DataFrame.from_dict(coeff_dict, orient='index')
+        coeff_df.columns = ['coeff']
+        coeff_df = coeff_df.reindex(index = features)
+        return coeff_df
+        
+        
     def linear_model(self, 
                      features=[], 
                      label=None, 
                      l2=1e-4, 
                      append_prediction=True, 
-                     return_dict = False):
+                     suffix=''):
         
-        if label is None:
-            assert self.default_label is not None, "no label and no default label"
-            label = self.default_label
-            print("use default label: ", label)
-        else:
-            self.default_label = label
-           
-        training_set = self.training_set
-        test_set = self.test_set 
-        
-        if (training_set is None) or (test_set is None):
-            print("no training set - test set splitting")
-            print("use full dataset as both training set and test set")
-            training_set = self 
-            test_set = self
+        training_set, test_set = self.training_set, self.test_set
+        assert (training_set is not None) and (test_set is not None)
             
         X = np.array(training_set[features].values)
         Y = np.array(training_set[label].values) 
@@ -155,14 +267,11 @@ class DataSet(pd.DataFrame):
 
         # append prediction 
         if append_prediction:
-            self['_pred'] = np.array(self[features]).dot(beta)
-            self['pred_'] = np.array(self[features_]).dot(beta_)
-            self['_err'] = np.array(self[label] - self['_pred'])
+            self['_pred%s' % suffix] = np.array(self[features]).dot(beta)
+            self['pred%s_' % suffix] = np.array(self[features_]).dot(beta_)
+            self['_err%s' % suffix] = np.array(self[label] - self['_pred%s' % suffix])
             self.split()
 
-        if return_dict:
-            return coeff_dict
-        
         coeff_df = pd.DataFrame.from_dict(coeff_dict, orient='index')
         coeff_df.columns = ['coeff']
         coeff_df = coeff_df.reindex(index = features)
@@ -171,9 +280,9 @@ class DataSet(pd.DataFrame):
     # ================ Analysis  =============== # 
     
     def get_reward(self, signal, a_min=None, a_max=None, label=None, mode='test'):
-        label = self.default_label if label is None else label 
+        label = self.label if label is None else label 
         assert label is not None
-        self.default_label = label
+        self.label = label
         
         if mode == 'test':
             df = self.test_set
