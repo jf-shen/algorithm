@@ -4,10 +4,9 @@ build DAG in accordance with a config json file
 @Email sweetfishhcl@sina.com
 """
 
-import tensorflow as tf
 import importlib
 import json
-from graph.dag import collect_dependency_map, get_priority_map, invert_map
+from dag import collect_dependency_map, get_priority_map, invert_map
 
 
 class RiverRun:
@@ -59,7 +58,7 @@ class RiverRun:
             node_fn = self.build_node_fn(node_type, params)
             output = node_fn(self.context, input_list, self.result_map)
 
-            self.info("finish building node: %s" % (prefix))
+            self.info("finish building node: %s" % prefix)
             self.result_map[prefix] = output
         else:
             # build sub-graph
@@ -90,7 +89,7 @@ class RiverRun:
                     local_result_map[node_name] = output
 
             self.result_map[prefix] = output
-            self.info("finish building graph: %s" % (prefix))
+            self.info("finish building graph: %s" % prefix)
         return output
 
 
@@ -101,38 +100,5 @@ if __name__ == '__main__':
         config = json.load(json_file)
 
     print('config = %s' % config)
-    param = {
-        "task_types": ['click', 'like'],
-        "is_train": True,
-        "is_infer": False,
-        "scope_dict":    {
-            'op_dep_list': [],
-            'dnn_scope_list': [],
-            'seq_scope_list': [],
-            'linear_scope_list': []
-        },
-        "node_prefix": 'node.',
-        "logit_head_name_format": "head_%s",
-        "only_dense": False,
-        "dist": None
-    }
-
-    features = {'_dense_input_norm': tf.zeros([1280, 1874])}
-
-    rank_model = RankModel(features, config_path, node_prefix='node.', local_mode=True)
-    rank_model.context.update(param)
-    rank_model.build_graph(prefix='Lagrange', config=config, input_list=[])
-
-    multi_logits = rank_model.context['multi_logits']
-    heads = rank_model.context['heads']
-
-    head = tf.contrib.estimator.multi_head(heads)
-
-    # spec = head.create_estimator_spec(
-    #     features=features,
-    #     mode=mode,
-    #     labels=labels,
-    #     logits=multi_logits,
-    #     train_op_fn=_train_op_fn)
 
 

@@ -43,6 +43,7 @@ def format_df_date(df, date_format = '%Y%m%d'):
         df.index =  list(map(lambda s: s.strftime(date_format), df.index))
     return df
 
+
 def accum_incr(x):
     """
     sum up increments
