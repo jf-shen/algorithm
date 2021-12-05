@@ -1,0 +1,22 @@
+{
+  "dag": {
+    "generate_keys": ["join_past_price", "join_future_price", "join_volume", "join_fundamental", "join_industry"],
+    "join_past_price":
+
+  }
+}
+
+# get keys
+df = generate_key(start_date=start_date, end_date=end_date, count=count, sample_dt=sample_dt)
+
+# join past features
+df = join_price(df, dt_list = feature_dt_list, output_format='price_%id')
+df = join_price(df, dt_list = feature_dt_list, field='volume', output_format='volume_%id')
+df = join_fundamental(df)
+df = join_industry(df)
+
+# join label & future features (remove in back testing)
+df = join_price(df, dt_list = label_dt_list, output_format = '_price_%id')
+
+# save
+origin_df = df.copy()

@@ -10,14 +10,16 @@ from dag import collect_dependency_map, get_priority_map, invert_map
 
 
 class RiverRun:
-    def __init__(self, features, config_path, node_prefix='node.', local_mode=True):
+    def __init__(self, config_path, node_prefix='node.', local_mode=True):
         self.context = {}
         self.result_map = {}
-        self.features = features
         self.node_prefix = node_prefix
 
         self.local_mode = local_mode
         self.graph_name = 'RiverRun'
+
+
+
 
         with open(config_path) as f:
             self.config = json.load(f)
@@ -32,7 +34,7 @@ class RiverRun:
 
     def build_node_fn(self, node_type, params):
         node_module = importlib.import_module(self.node_prefix + node_type)
-        node_fn = node_module.build_node_fn(params, self.features)
+        node_fn = node_module.build_node_fn(params)
         return node_fn
 
     def build_graph(self, prefix, config, input_list):
@@ -59,7 +61,8 @@ class RiverRun:
             output = node_fn(self.context, input_list, self.result_map)
 
             self.info("finish building node: %s" % prefix)
-            self.result_map[prefix] = output
+            if config.get("save_result"):
+                self.result_map[prefix] = output
         else:
             # build sub-graph
             self.info("start building graph: %s" % prefix)
@@ -88,7 +91,8 @@ class RiverRun:
                                               input_list=input_list)
                     local_result_map[node_name] = output
 
-            self.result_map[prefix] = output
+            if config.get('save_result'):
+                self.result_map[prefix] = output
             self.info("finish building graph: %s" % prefix)
         return output
 
