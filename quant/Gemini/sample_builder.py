@@ -1,0 +1,443 @@
+import numpy as np
+import pandas as pd
+import time
+import datetime
+import json
+import jqdata
+# from kuanke.user_space_api import *
+from pipeline import PIPELINE
+import warnings
+
+import types
+import functools
+from util import Stream, date2str, str2date, now
+
+
+# Start: compatiable preprocess
+
+def copy_func(f):
+    """Based on http://stackoverflow.com/a/6528148/190597 (Glenn Maynard)"""
+    g = types.FunctionType(f.__code__, f.__globals__, name=f.__name__,
+                           argdefs=f.__defaults__,
+                           closure=f.__closure__)
+    g = functools.update_wrapper(g, f)
+    # g.__kwdefaults__ = f.__kwdefaults__
+    return g
+
+
+_get_price = copy_func(get_price)
+
+
+def get_price(security,
+              start_date=None,
+              end_date=None,
+              frequency='daily',
+              fields=None,
+              skip_paused=False,
+              fq='pre',
+              count=None,
+              panel=True):
+    panel_result = _get_price(security,
+                              start_date=start_date,
+                              end_date=end_date,
+                              frequency='daily',
+                              fields=fields,
+                              skip_paused=skip_paused,
+                              fq='pre',
+                              count=count)
+    if panel:
+        return panel_result
+
+    df = panel_result.to_frame()
+    df['time'] = Stream(df.index).map(lambda p: p[0]).tolist()
+    df['code'] = Stream(df.index).map(lambda p: p[1]).tolist()
+    df.index = Stream(range(df.shape[0])).tolist()
+    return df
+
+
+# End: compatiable preprocess
+
+class SampleBuilder:
+    def __init__(self, index_code="000001.XSHG", pipeline=None, mode='train'):
+        # attributes
+        self.index_code = index_code
+        self.pipeline = pipeline
+
+        self.mode = mode
+        self.info = []
+
+        self.idx_date_dict = None
+        self.date_idx_dict = None
+
+        self.fg = None
+
+        self.date_list = None
+        self.keys = None
+        self.df = None
+
+        self.fn_dict = {
+            "join_price": self.join_price,
+            "join_fundamental": self.join_fundamental,
+            "join_industry": self.join_industry,
+            "join_index": self.join_index
+        }
+
+        self.init_env()
+
+    def init_env(self):
+        """
+        make {date:idx} & {idx:date} dict from dplus()
+        """
+        assert self.index_code is not None
+
+        all_datetime = get_price(security=self.index_code,
+                                 fields=[],
+                                 start_date=None,
+                                 end_date=datetime.datetime.today()).index.tolist()
+
+        all_date = list(map(date2str, all_datetime))
+
+        idx_date_dict = dict(enumerate(all_date))
+        date_idx_dict = {v: k for k, v in idx_date_dict.items()}
+
+        self.idx_date_dict = idx_date_dict
+        self.date_idx_dict = date_idx_dict
+
+    def dplus(self, ds, dt):
+        """
+        return the date of dt transaction days after ds
+        self.init_env() should be run first
+        """
+        if type(ds) == list:
+            return [self.dplus(x, dt) for x in ds]
+        else:
+            ds_idx = self.date_idx_dict[ds]
+            res_ds = self.idx_date_dict.get(ds_idx + dt)
+            if res_ds is None:
+                warnings.warn('result ds is None: ds = %s, dt = %s' % (ds, dt))
+            return res_ds
+
+    def set_mode(self, mode):
+        print('switch to %s mode' % mode)
+        self.mode = mode
+
+    def set_pipeline(self, pipeline=PIPELINE):
+        self.pipeline = pipeline
+
+    def set_fg(self, fg):
+        self.fg = fg
+
+    def load_pipeline(self, json_path):
+        with open(json_path, 'r') as f:
+            pipeline = json.load(f)
+
+        self.pipeline = pipeline
+
+    def run_pipeline(self):
+        for config in self.pipeline.get('sample_builder'):
+            fn = self.fn_dict[config['type']]
+            params = config.copy()
+            params.pop('type')
+            fn(**params)
+
+    def build_sample(self,
+                     start_date=None,
+                     end_date=None,
+                     count=None,
+                     sample_dt=1,
+                     mode='train'):
+
+        start_time = time.time()
+        self.info.append({
+            'op': 'build_sample',
+            'start_date': start_date,
+            'end_date': end_date,
+            'count': count,
+            'sample_dt': sample_dt,
+            'mode': mode,
+            'has_fg': self.fg is not None,
+            'timestamp': now()
+        })
+
+        self.generate_keys(start_date=start_date, end_date=end_date, count=count, sample_dt=sample_dt)
+        self.set_mode(mode)
+        self.run_pipeline()
+
+        print("Finish sample building! Time Elasped: %.2f" % (time.time() - start_time))
+        start_time = time.time()
+
+        if self.fg is not None:
+            self.fg.set_df(self.df)
+            self.df = self.fg.generate_features(mode=mode)
+
+        print("Finish feature generation! Time Elasped: %.2f" % (time.time() - start_time))
+
+        return self.df
+
+    def append_sample(self,
+                      past_df,
+                      start_date=None,
+                      end_date=None,
+                      count=None,
+                      sample_dt=1,
+                      mode='train'):
+
+        start_time = time.time()
+        self.info.append({
+            'op': 'append_sample',
+            'start_date': start_date,
+            'end_date': end_date,
+            'count': count,
+            'sample_dt': sample_dt,
+            'mode': mode,
+            'has_fg': self.fg is not None,
+            'timestamp': now()
+        })
+
+        self.generate_keys(start_date=start_date, end_date=end_date, count=count, sample_dt=sample_dt)
+        self.set_mode(mode)
+
+        key_fields = ['date', 'code']
+
+        df_common = past_df.merge(self.keys, how='inner', on=key_fields)
+        key_all = self.keys.merge(past_df[key_fields], how='outer', on=key_fields, indicator=True)
+        key_diff = key_all[key_all['_merge'] == 'left_only']
+        self.df = key_diff
+        self.run_pipeline()
+
+        print("Finish additional sample building! Time Elasped: %.2f" % (time.time() - start_time))
+        start_time = time.time()
+
+        if self.fg is not None:
+            self.fg.set_df(self.df)
+            self.df = self.fg.generate_features(mode=mode)
+
+        print("Finish feature generation! Time Elasped: %.2f" % (time.time() - start_time))
+
+        self.df = self.df.append(df_common)
+        return self.df
+
+    def generate_keys(self,
+                      index_code=None,
+                      start_date=None,
+                      end_date=None,
+                      count=None,
+                      sample_dt=1):
+
+        index_code = self.index_code
+        transaction_date = get_price(security=index_code,
+                                     fields=[],
+                                     start_date=start_date,
+                                     end_date=end_date,
+                                     count=count).index.tolist()
+        date_list = []
+        for i in range(len(transaction_date) - 1, -1, -sample_dt):
+            date_list.append(transaction_date[i])
+
+        self.date_list = date_list
+
+        keys = pd.DataFrame({'code': [], 'date': []})
+        for date in date_list:
+            stock_code = get_index_stocks(index_code, date=date)
+            daily_keys = pd.DataFrame({'code': stock_code, 'date': date2str(date)})
+            keys = keys.append(daily_keys)
+
+        self.keys = keys
+        print('finish key generation')
+
+        df = keys.copy()
+        self.df = df
+        return self
+
+    def join_price(self,
+                   dt_list=[-1],
+                   field='open',
+                   output_format=None,
+                   skip_online=False,
+                   verbose=True):
+        """
+        if skip_online is True, the function will not be executed
+        """
+
+        if output_format is None:
+            output_format = field + '_%id'
+        if skip_online and output_format[0] != '_':
+            output_format = '_' + output_format
+
+        if self.mode == 'predict' and skip_online:
+            print('[predict mode]: skip joining %s: dt_list = %s' % (field, dt_list))
+            return self
+
+        start_time = time.time()
+        print('joining %s: dt_list = %s' % (field, dt_list))
+
+        date_list = self.keys['date'].unique().tolist()
+
+        useful_date_list = []
+        for dt in dt_list:
+            useful_date_list += self.dplus(date_list, dt)
+
+        assert None not in useful_date_list, useful_date_list
+        useful_date_list = np.unique(useful_date_list)
+
+        stock_code = self.keys['code'].unique().tolist()
+
+        price_df = get_price(stock_code,
+                             start_date=str2date(min(useful_date_list)),
+                             end_date=str2date(max(useful_date_list)),
+                             frequency='daily',
+                             fields=[field],
+                             skip_paused=False,
+                             fq='pre',
+                             count=None,
+                             panel=False)
+
+        price_df = price_df[~price_df[field].isnull()]
+
+        price_df['T'] = price_df['time'].map(date2str)
+        price_df = price_df[price_df['T'].isin(useful_date_list)]
+
+        for dt in dt_list:
+            if verbose:
+                print('append date: %i' % dt)
+            price_df['T%i' % dt] = price_df['T'].map(lambda s: self.dplus(s, -dt))
+
+        for dt in dt_list:
+            if verbose:
+                print("join %s: date = %s" % (field, dt))
+            price = price_df[['T%i' % dt, 'code', field]]
+            price.columns = ['date', 'code', output_format % dt]
+            self.df = self.df.merge(price, how='left', on=['date', 'code'])
+
+        time_elapsed = time.time() - start_time
+        print('finish joining %s: dt_list = %s, time elapsed: %.2fs' % (field, dt_list, time_elapsed))
+
+        return self
+
+    def join_fundamental(self, verbose=True):
+        """
+        Problem: code need to be changed when different fields are queried
+        """
+
+        start_time = time.time()
+        print("joining fundamental data ...")
+
+        date_list = self.keys['date'].unique().tolist()
+
+        res_df = None
+        for ds in date_list:
+            if verbose:
+                print('joining fundamental: date = %s' % ds)
+
+            code_list = self.keys[self.keys['date'] == ds]['code'].unique().tolist()
+            q = query(
+                valuation.code,
+                valuation.market_cap,
+                balance.total_assets,
+                balance.total_liability,
+                indicator.inc_revenue_year_on_year,
+                balance.development_expenditure
+            ).filter(
+                valuation.code.in_(code_list)
+            )
+
+            fundamental_df = get_fundamentals(q, date=str2date(ds))
+            fundamental_df['date'] = ds
+            if res_df is None:
+                res_df = fundamental_df
+            else:
+                res_df = res_df.append(fundamental_df)
+
+        self.df = self.df.merge(res_df, how='left', on=['date', 'code'])
+        time_elapsed = time.time() - start_time
+        print("finish joining fundamental data, time elapsed: %.2fs" % time_elapsed)
+
+        return self
+
+    def join_industry(self):
+        """
+        Problem: haven't taken date into consideration
+        """
+        print("joining industry code ...")
+
+        date_list = self.keys['date'].unique().tolist()
+        industry_list = ['801010', '801020', '801030', '801040', '801050', '801080', '801110', '801120', '801130',
+                         '801140', '801150', '801160', '801170', '801180', '801200', '801210', '801230', '801710',
+                         '801720', '801730', '801740', '801750', '801760', '801770', '801780', '801790', '801880',
+                         '801890']
+        industry_df = pd.DataFrame({'code': [], 'industry_code': []})
+        for industry_code in industry_list:
+            stock_code = get_industry_stocks(industry_code, date=str2date(max(date_list)))
+            industry_stocks = pd.DataFrame({'code': stock_code, 'industry_code': industry_code})
+            industry_df = industry_df.append(industry_stocks)
+
+        assert industry_df.shape[0] == industry_df['code'].unique().shape[0]  # a stock belongs only to one industry
+
+        self.df = self.df.merge(industry_df, how='left', on='code')
+        return self
+
+    def join_index(self,
+                   dt_list=[-1],
+                   field='open',
+                   output_format=None,
+                   skip_online=False,
+                   verbose=True):
+        """
+        if skip_online is True, the function will not be executed
+        """
+
+        if output_format is None:
+            output_format = 'index_' + field + '_%id'
+
+        if skip_online and output_format[0] != '_':
+            output_format = '_' + output_format
+
+        if self.mode == 'predict' and skip_online:
+            print('[predict mode]: skip joining index %s: dt_list = %s' % (field, dt_list))
+            return self
+
+        start_time = time.time()
+        print('joining index %s: dt_list = %s' % (field, dt_list))
+
+        date_list = self.keys['date'].unique().tolist()
+
+        useful_date_list = []
+        for dt in dt_list:
+            useful_date_list += self.dplus(date_list, dt)
+
+        assert None not in useful_date_list, useful_date_list
+        useful_date_list = np.unique(useful_date_list)
+
+        price_df = get_price([self.index_code],
+                             start_date=str2date(min(useful_date_list)),
+                             end_date=str2date(max(useful_date_list)),
+                             frequency='daily',
+                             fields=[field],
+                             skip_paused=False,
+                             fq='pre',
+                             count=None,
+                             panel=False)
+
+        price_df = price_df[~price_df[field].isnull()]
+
+        price_df['T'] = price_df['time'].map(date2str)
+        price_df = price_df[price_df['T'].isin(useful_date_list)]
+
+        for dt in dt_list:
+            if verbose:
+                print('append date: %i' % dt)
+            price_df['T%i' % dt] = price_df['T'].map(lambda s: self.dplus(s, -dt))
+
+        for dt in dt_list:
+            if verbose:
+                print("join index %s: date = %s" % (field, dt))
+            price = price_df[['T%i' % dt, field]]
+            price.columns = ['date', output_format % dt]
+            self.df = self.df.merge(price, how='left', on=['date'])
+
+        time_elapsed = time.time() - start_time
+        print('finish joining index %s: dt_list = %s, time elapsed: %.2fs' % (field, dt_list, time_elapsed))
+
+        return self
+
+
