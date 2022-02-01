@@ -5,7 +5,7 @@ str2date = lambda s: datetime.datetime.strptime(s, '%Y%m%d')
 now = lambda: datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
-class Stream():
+class Stream:
     def __init__(self, obj):
         self.iterable = obj
 
@@ -44,7 +44,7 @@ def diff_df(df, dt=1, remove_init_price=False):
     return dff
 
 
-## get_null chunk from df
+# get_null chunk from df
 def get_null(df):
     null_col = df.isnull().any(axis=0).index.tolist()
     null_row = df.isnull().any(axis=1)

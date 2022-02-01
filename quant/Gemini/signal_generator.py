@@ -6,6 +6,9 @@ import sklearn
 from sklearn.svm import SVR
 import xgboost as xgb
 
+param = {'max_depth': 2,  'eta': 1, 'objective': 'reg:linear'}
+num_round = 2
+
 
 def get_null_row(df):
     null_row = df.isnull().any(axis=1)
@@ -131,7 +134,7 @@ class SignalGenerator:
         summary_df['valid'] = (summary_df['max'] > summary_df['min'])  # filter all same column
 
         df = df[summary_df['valid']]  # select valid rows
-        self.features = Streams(fea_list).filter(lambda s: s in df.index.tolist()).tolist()
+        self.features = Stream(fea_list).filter(lambda s: s in df.index.tolist()).tolist()
 
         raise NotImplementedError
 
@@ -156,20 +159,20 @@ class SignalGenerator:
         pass
 
 
-sg = SignalGenerator(df_train)
-sg.split(0.2, verbose=True)
-
-sg.set_label('_price_incr_7d')
-sg.set_features()
-
-start_time = time.time()
-# sg.fit_svr()
-params = {'max_depth': 5, 'eta': 1, 'objective': 'reg:linear', 'silent': 0}
-sg.fit_xgboost(num_round=100, params=params)
-print("\nfit svr time elaspsed: %.2f" % (time.time() - start_time))
-
-# df_predict['pred'] = sg.predict(df_predict)
-# sg.test_set['pred'] = sg.predict(sg.test_set)
-
-df_predict['pred'] = sg.predict_xgboost(df_predict)
-sg.test_set['pred'] = sg.predict_xgboost(sg.test_set)
+# sg = SignalGenerator(df_train)
+# sg.split(0.2, verbose=True)
+#
+# sg.set_label('_price_incr_7d')
+# sg.set_features()
+#
+# start_time = time.time()
+# # sg.fit_svr()
+# params = {'max_depth': 5, 'eta': 1, 'objective': 'reg:linear', 'silent': 0}
+# sg.fit_xgboost(num_round=100, params=params)
+# print("\nfit svr time elaspsed: %.2f" % (time.time() - start_time))
+#
+# # df_predict['pred'] = sg.predict(df_predict)
+# # sg.test_set['pred'] = sg.predict(sg.test_set)
+#
+# df_predict['pred'] = sg.predict_xgboost(df_predict)
+# sg.test_set['pred'] = sg.predict_xgboost(sg.test_set)

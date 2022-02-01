@@ -18,9 +18,6 @@ class RiverRun:
         self.local_mode = local_mode
         self.graph_name = 'RiverRun'
 
-
-
-
         with open(config_path) as f:
             self.config = json.load(f)
             f.close()
