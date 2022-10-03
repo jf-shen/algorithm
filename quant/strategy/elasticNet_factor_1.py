@@ -121,7 +121,3 @@ def get_training_data(context):
 
     return X, Y
 
-
-
-        
-            
